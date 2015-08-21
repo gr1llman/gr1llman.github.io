@@ -1,0 +1,117 @@
+---
+title: "Predicting the Quality of Exercise Performance"
+author: "Stephen Nekolaichuk - August 20, 2015"
+output: html_document
+header-includes: \usepackage{graphicx}
+---
+
+### Background
+Personal devices are increasingly being used to monitor human activity.  Because of the growing use of these devices there is an increasing amount of research utilizing the vast amounts of data collected by them.
+
+One such study, "Qualitative Activity Recognition of Weight Lifting Exercises," presented as part of the proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. by "Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. ", was focused on recognizing the quality of how arm curls were being executed, based on specific instructions about how to do them correctly and specific instructions to do them incorrectly in specific ways. A quality "outcome" measurement ("A" through "E") was assessed for each trial. Sensors were placed at three (3) points on the body of multiple subjects, as well as on the dumbbell used for the experiement.  These sensors captured various measurements, including 3D movement, acceleration, etc. associated with each trial. A complete description of the experiment is available at this link: http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf
+
+### Purpose of this analysis
+The purpose of this analysis was to build a machine learning based model that would accurately predict quality of the performance of arm curls a subset of the study's measurement data.  Creating this analysis is a course requirement for "Practical Machine Learning" which is a Johns Hopkins Bloomberg School of Public Health offering made available through coursera.org.
+
+### Goals and Approach
+The assignment did not include any specific requirement for accuracy, but to facilitate accurate prediction a target of 95% accuracy was assumed to be adequate.  The steps identified to build the model were to begin with preliminary exploratory analysis, clean the data as appropriate, segment the training data into training and test data sets to facilitate cross-validation, tune the model as required to reach 95% accuracy (i.e., 5% or less out-of-sample error) on the test data, and then apply the model to the testing data set provided to validate the results as well as facilitate submission of those results, which was another course requirement.
+
+### Exploratory Analysis and Data Cleaning
+The data for the assignment was provided in two (2) csv files: a training data set and a testing data set.  The testing data set, which conceptually was really a type of validation data set, consisted of twenty specific test cases on which to apply the final model.  The results of that validation will be discussed later in this paper.
+
+```{r load_train, echo=FALSE, warning=FALSE, message=FALSE}
+# This code chunk sets up the environment and reads the training data
+setwd("~/Course - Practical Machine Learning/Assignment")
+### Load libraries
+library(ggplot2); library(lattice); library(RGtk2); library(caret); 
+library(rattle); library(rpart); library(randomForest)
+### Read the train file
+trainfile <- read.csv("pml-training.csv")
+```
+The raw training data set consisted of `r format(dim(trainfile)[1],big.mark=",")` rows of `r format(dim(trainfile)[2],big.mark=",")` variables. By reviewing the documentation it was evident that the first seven (7) variables would not be important in the model, as they were descriptive of the experiment and really not the results.  These included the row number, the subject name and various time-stamps.  These variables were removed.
+```{r first_clean, echo=FALSE, warning=FALSE, message=FALSE}
+### This code chunk removes the first 7 variables and all variables with NA values
+### First seven (7) columns are descriptive and are not needed - remove them
+cleantrain <- trainfile[,8:160]
+### Remove all columns with any NA values
+cleantrain <- cleantrain[, colSums(is.na(cleantrain)) == 0]
+rem_na <- dim(trainfile)[2] - 7 - dim(cleantrain)[2]
+```
+Through exploration, it was determined that there were `r format(rem_na, big.mark=",")` variables with `r format(max(colSums(is.na(trainfile))),big.mark=",")` missing ("NA") values.  A decision was made to not attempt to replace these values using means or any other method as it was assumed that with so few actual values this would render the variables meaningless or misleading.  These variables were removed.
+```{r second_clean, echo=FALSE, warning=FALSE, message=FALSE}
+### This code chunk removes the the variables which are not numeric and not required
+### Remove all columns with non-numeric values and then put back classe
+bef_rem <- dim(cleantrain)[2]
+classeSave <- cleantrain$class
+num_cols <- sapply(cleantrain, is.numeric)
+cleantrain <- cleantrain[, num_cols]
+cleantrain$classe <- classeSave
+rem_nn <- bef_rem - dim(cleantrain)[2] 
+```
+Exploring the remaining variables, it was discovered that there were `r format(rem_nn,big.mark=",")` variables, excluding the exercise quality variable to predict ("classe") that were non-numeric.  It was decided to remove these variables and proceed with the analysis to determine if the remaining variables would build a sufficiently accurate model.  The intent was that if no good model could be built, these variables would be further examined and added back into the analysis if required.  This turned out to not be required.  The remaining `r format(dim(cleantrain)[2],big.mark=",")` varibles (including "classe") were used for the analysis.
+```{r split_data, echo=FALSE, warning=FALSE, message=FALSE}
+### This code chunk splits the training data into training and test
+### Create training and testing / cross-validation data sets
+set.seed(97)
+inTrain <- createDataPartition(y=cleantrain$classe, p=0.75, list=FALSE)
+training <- cleantrain[inTrain,]
+testing <- cleantrain[-inTrain,]
+```
+### Splitting the training data into training and testing data.frames
+The "createDataPartition" function from the "caret" package was used to split the training data into a training data.frame containing 75% of the data and a testing data.frame containing the remaining 25%.  This resulted in the training data.frame having `r format(dim(training)[1],big.mark=",")` rows and the testing data.frame having `r format(dim(testing)[1],big.mark=",")` rows.
+
+### Preliminary attempts at building the model and preprocessing the data
+Several attempts were made to build a model without any addition preprocessing using different methods.  Each of these took an excessively long time and did not yield the required results.  After further review of the course notes, course discussion forum, and R reference material it became apparent that some preprocessing would very likely shorten the run-time and improve accuracy.
+```{r preproc_data, echo=FALSE, warning=FALSE, message=FALSE}
+### This code chunk preprocesses the data using the PCA method
+### Preprocess and prep for train
+preproc <- preProcess(training[, -53], method="pca")
+trainPC <- predict(preproc, training[, -53])
+controltrain <- trainControl(method = "oob")
+```
+It was determined that the Principle Component Analysis (PCA) method would likely provide good results.  That method was applied to the training data.  Preprocessing was run on the `r format(preproc$dim[2],big.mark=",")` training variables.  The PCA determined that there were `r format(preproc$numComp,big.mark=",")` components required to capture 95% of the variance. 
+
+Using this data, a simple tree model was attempted using the "rpart" training method.  Unfortunately, as the following tree diagram indicates, this model was not even successful at being able to predict all potential "classe" so it was discarded.
+```{r bad_model, echo=FALSE, warning=FALSE, message=FALSE}
+### This code chunk creates a rpart model
+modFit <- train(training$classe ~ ., method='rpart', data = trainPC)
+```
+
+### Discarded "rpart" model
+```{r figure_1, out.height='3in', fig.pos='h!', fig.align='center', fig.cap='Discarded rpart model', echo=FALSE}
+### This code chunk displays the fancyplot of the discarded rpart model
+fancyRpartPlot(modFit$finalModel)
+```
+
+### The random forest model
+After these attempts it was determined that a random forest model could likely provide very good results so such a model was developed.  This made it possible to control the train using the "out-of-bag" (oob) method which the reference material indicated should greatly improve the speed of the algorithm without losing significant accuracy.  It was determined that limiting the number of trees to a relatively low number could also provide good, fast results.  The "ntree" varible in the "train" function was set to 10 for the model to accomplish this.
+
+Here is the output of the confusion matrix for the model, comparing the training data to the predictions from the model.
+
+### Confusion matrix - training
+```{r good_model, echo=FALSE, warning=FALSE, message=FALSE}
+### This code chunk creates the random forest model and generates the training confusion matrix
+set.seed(97)
+modFit <- train(training$classe ~ ., method='rf', trControl = controltrain, data = trainPC, ntree = 10)
+trainPC <- predict(preproc, training[, -53])
+confusionMatrix(training$classe, predict(modFit,trainPC))
+```
+
+The accuracy of 99.88% indicated by this confusion matrix led to an assumption that this model may meet the target of 95% when cross-validated with the testing data.  The model was applied to the testing data.  Here is the confusionmatrix for the first run of cross-validation against the testing data.
+
+### Confusion matrix - testing
+```{r test_model, echo=FALSE, warning=FALSE, message=FALSE}
+### This code chunk creates the random forest model and generates the training confusion matrix
+set.seed(97)
+testPC <- predict(preproc, testing[, -53])
+confusionMatrix(testing$classe, predict(modFit,testPC))
+```
+
+The accuracy as indicated of 95.11% met the target of 95% that was set as a goal of the analysis so no further cross-validation was required.
+
+### Summary and results of the validation
+
+In summary, the random forest model created yielded a very low **in sample error rate of 0.12%** (the inverse of the accuracy of the training model accuracy) and an acceptable **out of sample error rate of 4.89%** (the inverse of the testing model accuracy).
+
+When the model was run against the twenty (20) test cases, and the results submitted, nineteen (19) of twenty (20) were correct.  Coincidentally, this is exactly 95% accurate, a result that would not necessarily be guaranteed, especially across such a small number of test cases.
+
